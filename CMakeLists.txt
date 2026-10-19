@@ -14,9 +14,15 @@ build_lib(
     LIBNAME futurenet-tntn
     SOURCE_FILES model/futurenet-tntn.cc
                  helper/futurenet-tntn-helper.cc
+                 model/access-state-provider.cc
+                 model/mock-access-state-provider.cc
     HEADER_FILES model/futurenet-tntn.h
                  helper/futurenet-tntn-helper.h
+                 model/tntn-access-types.h
+                 model/access-state-provider.h
+                 model/mock-access-state-provider.h
     LIBRARIES_TO_LINK ${libcore}
+                      ${libnetwork}
     TEST_SOURCES test/futurenet-tntn-test-suite.cc
                  ${examples_as_tests_sources}
 )
