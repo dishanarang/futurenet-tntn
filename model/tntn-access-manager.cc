@@ -94,7 +94,8 @@ TntnAccessManager::AddAccess(uint32_t accessId, Ptr<TntnAccessStateProvider> pro
     NS_LOG_FUNCTION(this << accessId << provider);
     NS_ABORT_MSG_IF(!provider, "AddAccess: provider must not be null");
     NS_ABORT_MSG_IF(accessId == TNTN_NO_ACCESS, "AddAccess: TNTN_NO_ACCESS is reserved");
-    NS_ABORT_MSG_IF(FindProvider(accessId), "AddAccess: access " << accessId << " already added");
+    NS_ABORT_MSG_IF(GetAccessProvider(accessId),
+                    "AddAccess: access " << accessId << " already added");
     m_accesses.emplace_back(accessId, provider);
     // Assume available so an access that starts out down is reported once.
     m_lastAvailable.push_back(true);
@@ -190,7 +191,7 @@ bool
 TntnAccessManager::ForceAccess(uint32_t accessId)
 {
     NS_LOG_FUNCTION(this << accessId);
-    Ptr<TntnAccessStateProvider> provider = FindProvider(accessId);
+    Ptr<TntnAccessStateProvider> provider = GetAccessProvider(accessId);
     NS_ABORT_MSG_IF(!provider, "ForceAccess: access " << accessId << " not added");
 
     if (m_handoverInProgress)
@@ -290,7 +291,7 @@ TntnAccessManager::CompleteHandover()
 }
 
 Ptr<TntnAccessStateProvider>
-TntnAccessManager::FindProvider(uint32_t accessId) const
+TntnAccessManager::GetAccessProvider(uint32_t accessId) const
 {
     for (const auto& [id, provider] : m_accesses)
     {
