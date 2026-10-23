@@ -2,6 +2,7 @@
 #include "ns3/enum.h"
 #include "ns3/simulator.h"
 #include "ns3/test.h"
+#include "ns3/tntn-access-manager.h"
 #include "ns3/tntn-lowest-delay-policy.h"
 #include "ns3/tntn-mock-access-state-provider.h"
 #include "ns3/tntn-terrestrial-preferred-policy.h"
@@ -482,6 +483,322 @@ class TntnLowestDelayAttributesTestCase : public TestCase
 
 /**
  * @ingroup futurenet-tntn-tests
+ * One manager with a terrestrial and an NTN mock access, recording every
+ * trace it fires. Defaults: 1 s interval, 5 s dwell, 50 ms execution delay.
+ */
+class TntnManagerScenario
+{
+  public:
+    /// A HandoverStart or HandoverComplete event
+    struct Handover
+    {
+        double timeS;      //!< Simulation time, s
+        uint32_t oldId;    //!< Old access
+        uint32_t newId;    //!< New access
+        TntnReason reason; //!< Reason (NONE for HandoverComplete)
+    };
+
+    TntnManagerScenario()
+    {
+        ter = CreateObject<TntnMockAccessStateProvider>();
+        ter->SetAccessType(TntnAccessType::TERRESTRIAL);
+        ntn = CreateObject<TntnMockAccessStateProvider>();
+        ntn->SetAccessType(TntnAccessType::NTN);
+        ntn->SetDelay(MilliSeconds(540));
+
+        manager = CreateObject<TntnAccessManager>();
+        manager->SetNodeId(7);
+        manager->AddAccess(TER, ter);
+        manager->AddAccess(NTN, ntn);
+        manager->SetPolicy(CreateObject<TntnTerrestrialPreferredPolicy>());
+
+        manager->TraceConnectWithoutContext("DecisionEvaluated",
+                                            MakeCallback(&TntnManagerScenario::OnDecision, this));
+        manager->TraceConnectWithoutContext("HandoverStart",
+                                            MakeCallback(&TntnManagerScenario::OnStart, this));
+        manager->TraceConnectWithoutContext("HandoverComplete",
+                                            MakeCallback(&TntnManagerScenario::OnComplete, this));
+        manager->TraceConnectWithoutContext(
+            "AccessUnavailable",
+            MakeCallback(&TntnManagerScenario::OnUnavailable, this));
+    }
+
+    /**
+     * Record a DecisionEvaluated event.
+     * @param nodeId node id
+     * @param current current access
+     * @param selected selected access
+     * @param reason reason
+     */
+    void OnDecision(uint32_t nodeId, uint32_t current, uint32_t selected, TntnReason reason)
+    {
+        decisions++;
+        lastNodeId = nodeId;
+    }
+
+    /**
+     * Record a HandoverStart event.
+     * @param nodeId node id
+     * @param oldId old access
+     * @param newId new access
+     * @param reason reason
+     */
+    void OnStart(uint32_t nodeId, uint32_t oldId, uint32_t newId, TntnReason reason)
+    {
+        starts.push_back({Simulator::Now().GetSeconds(), oldId, newId, reason});
+    }
+
+    /**
+     * Record a HandoverComplete event.
+     * @param nodeId node id
+     * @param oldId old access
+     * @param newId new access
+     */
+    void OnComplete(uint32_t nodeId, uint32_t oldId, uint32_t newId)
+    {
+        completes.push_back({Simulator::Now().GetSeconds(), oldId, newId, TntnReason::NONE});
+    }
+
+    /**
+     * Record an AccessUnavailable event.
+     * @param nodeId node id
+     * @param accessId access that became unavailable
+     */
+    void OnUnavailable(uint32_t nodeId, uint32_t accessId)
+    {
+        unavailable.push_back(accessId);
+    }
+
+    Ptr<TntnMockAccessStateProvider> ter; //!< Terrestrial access
+    Ptr<TntnMockAccessStateProvider> ntn; //!< NTN access
+    Ptr<TntnAccessManager> manager;       //!< Manager under test
+    uint32_t decisions{0};                //!< DecisionEvaluated count
+    uint32_t lastNodeId{0};               //!< Node id seen in the last decision
+    std::vector<Handover> starts;         //!< HandoverStart events
+    std::vector<Handover> completes;      //!< HandoverComplete events
+    std::vector<uint32_t> unavailable;    //!< AccessUnavailable events
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
+ * T05 dwell time and T06 traces, on one outage-and-recovery run.
+ *
+ * Terrestrial is down from 1.5 s to 2.5 s. Expected: initial selection of
+ * terrestrial at 0 s, immediate fallback to NTN at 2 s despite the dwell time
+ * (current unavailable), return to terrestrial blocked until 2.05 + 5 s, so it
+ * happens at the 8 s evaluation.
+ */
+class TntnManagerDwellAndTraceTestCase : public TestCase
+{
+  public:
+    TntnManagerDwellAndTraceTestCase()
+        : TestCase("T05/T06 dwell blocks early return; traces report old/new access")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        TntnManagerScenario s;
+        s.ter->ScheduleAvailable(Seconds(1.5), false);
+        s.ter->ScheduleAvailable(Seconds(2.5), true);
+        s.manager->Start();
+
+        uint32_t at2s02 = 0;
+        bool inProgressAt2s02 = false;
+        uint32_t at7s5 = 0;
+        Simulator::Schedule(Seconds(2.02), [&]() {
+            at2s02 = s.manager->GetCurrentAccess();
+            inProgressAt2s02 = s.manager->IsHandoverInProgress();
+        });
+        Simulator::Schedule(Seconds(7.5), [&]() { at7s5 = s.manager->GetCurrentAccess(); });
+        Simulator::Stop(Seconds(10));
+        Simulator::Run();
+
+        // T05
+        NS_TEST_ASSERT_MSG_EQ(at7s5, NTN, "return to terrestrial not blocked by dwell");
+        NS_TEST_ASSERT_MSG_EQ(s.manager->GetCurrentAccess(), TER, "never returned to terrestrial");
+
+        // Handover execution: old access stays current until completion.
+        NS_TEST_ASSERT_MSG_EQ(inProgressAt2s02, true, "handover should be in progress at 2.02 s");
+        NS_TEST_ASSERT_MSG_EQ(at2s02, TER, "access changed before handover completed");
+
+        // T06
+        NS_TEST_ASSERT_MSG_EQ(s.starts.size(), 3, "expected 3 handovers");
+        NS_TEST_ASSERT_MSG_EQ(s.completes.size(), 3, "expected 3 handover completions");
+        const uint32_t expectedOld[] = {TNTN_NO_ACCESS, TER, NTN};
+        const uint32_t expectedNew[] = {TER, NTN, TER};
+        const TntnReason expectedReason[] = {TntnReason::INITIAL_SELECTION,
+                                             TntnReason::CURRENT_UNAVAILABLE,
+                                             TntnReason::PREFERRED_RESTORED};
+        const double expectedStartS[] = {0.0, 2.0, 8.0};
+        for (std::size_t i = 0; i < s.starts.size() && i < 3; ++i)
+        {
+            NS_TEST_ASSERT_MSG_EQ(s.starts[i].oldId, expectedOld[i], "HandoverStart old " << i);
+            NS_TEST_ASSERT_MSG_EQ(s.starts[i].newId, expectedNew[i], "HandoverStart new " << i);
+            NS_TEST_ASSERT_MSG_EQ(TntnReasonToString(s.starts[i].reason),
+                                  TntnReasonToString(expectedReason[i]),
+                                  "HandoverStart reason " << i);
+            NS_TEST_ASSERT_MSG_EQ_TOL(s.starts[i].timeS,
+                                      expectedStartS[i],
+                                      1e-9,
+                                      "HandoverStart time " << i);
+            NS_TEST_ASSERT_MSG_EQ(s.completes[i].oldId,
+                                  expectedOld[i],
+                                  "HandoverComplete old " << i);
+            NS_TEST_ASSERT_MSG_EQ(s.completes[i].newId,
+                                  expectedNew[i],
+                                  "HandoverComplete new " << i);
+            NS_TEST_ASSERT_MSG_EQ_TOL(s.completes[i].timeS,
+                                      expectedStartS[i] + 0.05,
+                                      1e-9,
+                                      "HandoverComplete time " << i);
+        }
+        NS_TEST_ASSERT_MSG_EQ(s.unavailable.size(), 1, "AccessUnavailable should fire once");
+        NS_TEST_ASSERT_MSG_EQ(s.unavailable.at(0), TER, "wrong access reported unavailable");
+        NS_TEST_ASSERT_MSG_EQ(s.lastNodeId, 7, "wrong node id in traces");
+        // Evaluations at 0..9 s, all ticks fall outside the 50 ms handover windows.
+        NS_TEST_ASSERT_MSG_EQ(s.decisions, 10, "wrong number of DecisionEvaluated events");
+
+        Simulator::Destroy();
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
+ * ForceAccess overrides the policy and the dwell time, and refuses an
+ * unavailable target.
+ */
+class TntnManagerForceAccessTestCase : public TestCase
+{
+  public:
+    TntnManagerForceAccessTestCase()
+        : TestCase("ForceAccess switches immediately and refuses unavailable access")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        TntnManagerScenario s;
+        s.manager->Start();
+
+        bool forced = false;
+        bool refused = true;
+        uint32_t at1s1 = 0;
+        Simulator::Schedule(Seconds(1.5), [&]() { forced = s.manager->ForceAccess(NTN); });
+        Simulator::Schedule(Seconds(1.6), [&]() { at1s1 = s.manager->GetCurrentAccess(); });
+        Simulator::Schedule(Seconds(2.5), [&]() {
+            s.ter->SetAvailable(false);
+            refused = s.manager->ForceAccess(TER);
+        });
+        Simulator::Stop(Seconds(3));
+        Simulator::Run();
+
+        NS_TEST_ASSERT_MSG_EQ(forced, true, "ForceAccess to an available access failed");
+        NS_TEST_ASSERT_MSG_EQ(at1s1, NTN, "ForceAccess did not switch");
+        NS_TEST_ASSERT_MSG_EQ(TntnReasonToString(s.starts.at(1).reason),
+                              TntnReasonToString(TntnReason::FORCED),
+                              "forced handover has wrong reason");
+        NS_TEST_ASSERT_MSG_EQ(refused, false, "ForceAccess to an unavailable access succeeded");
+        // The 2 s evaluation wants terrestrial back, but dwell holds NTN.
+        NS_TEST_ASSERT_MSG_EQ(s.manager->GetCurrentAccess(), NTN, "dwell ignored after forcing");
+
+        Simulator::Destroy();
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
+ * Guideline section 8.4: two identical runs produce identical handover traces.
+ */
+class TntnManagerRepeatabilityTestCase : public TestCase
+{
+  public:
+    TntnManagerRepeatabilityTestCase()
+        : TestCase("Identical runs produce identical handover traces")
+    {
+    }
+
+  private:
+    /**
+     * Run a scripted outage scenario.
+     * @return the HandoverStart events
+     */
+    static std::vector<TntnManagerScenario::Handover> RunOnce()
+    {
+        TntnManagerScenario s;
+        s.ter->ScheduleAvailable(Seconds(3.5), false);
+        s.ter->ScheduleAvailable(Seconds(4.5), true);
+        s.ter->ScheduleDelay(Seconds(12.5), MilliSeconds(200));
+        s.manager->Start();
+        Simulator::Stop(Seconds(20));
+        Simulator::Run();
+        Simulator::Destroy();
+        return s.starts;
+    }
+
+    void DoRun() override
+    {
+        auto a = RunOnce();
+        auto b = RunOnce();
+        NS_TEST_ASSERT_MSG_EQ(a.size(), b.size(), "different number of handovers");
+        for (std::size_t i = 0; i < a.size() && i < b.size(); ++i)
+        {
+            NS_TEST_ASSERT_MSG_EQ(a[i].timeS, b[i].timeS, "handover " << i << " time differs");
+            NS_TEST_ASSERT_MSG_EQ(a[i].newId, b[i].newId, "handover " << i << " target differs");
+        }
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
+ * Manager defaults and attribute ranges (SRS section 5).
+ */
+class TntnManagerAttributesTestCase : public TestCase
+{
+  public:
+    TntnManagerAttributesTestCase()
+        : TestCase("Access manager defaults and attribute ranges")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        auto m = CreateObject<TntnAccessManager>();
+        TimeValue t;
+        m->GetAttribute("DecisionInterval", t);
+        NS_TEST_ASSERT_MSG_EQ(t.Get(), Seconds(1), "default DecisionInterval");
+        m->GetAttribute("MinDwellTime", t);
+        NS_TEST_ASSERT_MSG_EQ(t.Get(), Seconds(5), "default MinDwellTime");
+        m->GetAttribute("HandoverExecutionDelay", t);
+        NS_TEST_ASSERT_MSG_EQ(t.Get(), MilliSeconds(50), "default HandoverExecutionDelay");
+        NS_TEST_ASSERT_MSG_EQ(m->GetCurrentAccess(), TNTN_NO_ACCESS, "initial access");
+        NS_TEST_ASSERT_MSG_EQ(m->IsHandoverInProgress(), false, "initial handover state");
+
+        NS_TEST_ASSERT_MSG_EQ(
+            m->SetAttributeFailSafe("DecisionInterval", TimeValue(MilliSeconds(99))),
+            false,
+            "DecisionInterval below 100 ms should be rejected");
+        NS_TEST_ASSERT_MSG_EQ(m->SetAttributeFailSafe("DecisionInterval", TimeValue(Seconds(11))),
+                              false,
+                              "DecisionInterval above 10 s should be rejected");
+        NS_TEST_ASSERT_MSG_EQ(m->SetAttributeFailSafe("MinDwellTime", TimeValue(Seconds(0))),
+                              true,
+                              "MinDwellTime 0 should be accepted");
+        NS_TEST_ASSERT_MSG_EQ(m->SetAttributeFailSafe("MinDwellTime", TimeValue(Seconds(61))),
+                              false,
+                              "MinDwellTime above 60 s should be rejected");
+        NS_TEST_ASSERT_MSG_EQ(
+            m->SetAttributeFailSafe("HandoverExecutionDelay", TimeValue(Seconds(2.5))),
+            false,
+            "HandoverExecutionDelay above 2 s should be rejected");
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
  * Test suite for module futurenet-tntn.
  */
 class TntnTestSuite : public TestSuite
@@ -499,6 +816,10 @@ class TntnTestSuite : public TestSuite
         AddTestCase(new TntnLowestDelaySelectsMinimumTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnLowestDelayHysteresisTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnLowestDelayAttributesTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnManagerDwellAndTraceTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnManagerForceAccessTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnManagerRepeatabilityTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnManagerAttributesTestCase, TestCase::Duration::QUICK);
     }
 };
 
