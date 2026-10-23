@@ -3,10 +3,12 @@
  * prints what it chose and why. No simulation time, manager or network is
  * involved; it only shows how a policy turns access states into a decision.
  *
- *   ./ns3 run tntn-policy-demo
+ *   ./ns3 run "tntn-policy-demo --policy=terrestrial"
+ *   ./ns3 run "tntn-policy-demo --policy=lowest-delay"
  */
 
 #include "ns3/core-module.h"
+#include "ns3/tntn-lowest-delay-policy.h"
 #include "ns3/tntn-terrestrial-preferred-policy.h"
 
 #include <iomanip>
@@ -82,11 +84,26 @@ Ask(Ptr<TntnAccessSelectionPolicy> policy,
 int
 main(int argc, char* argv[])
 {
+    std::string policyName = "terrestrial";
+
     CommandLine cmd(__FILE__);
+    cmd.AddValue("policy", "Selection policy: terrestrial or lowest-delay", policyName);
     cmd.Parse(argc, argv);
 
-    // The researcher chooses the policy here. Swap this line to test another one.
-    Ptr<TntnAccessSelectionPolicy> policy = CreateObject<TntnTerrestrialPreferredPolicy>();
+    // The researcher chooses the policy here; the rest of the program is the same for any policy.
+    Ptr<TntnAccessSelectionPolicy> policy;
+    if (policyName == "terrestrial")
+    {
+        policy = CreateObject<TntnTerrestrialPreferredPolicy>();
+    }
+    else if (policyName == "lowest-delay")
+    {
+        policy = CreateObject<TntnLowestDelayPolicy>();
+    }
+    else
+    {
+        NS_ABORT_MSG("Unknown --policy '" << policyName << "'; use terrestrial or lowest-delay");
+    }
 
     const auto ter = TntnAccessType::TERRESTRIAL;
     const auto ntn = TntnAccessType::NTN;
@@ -127,6 +144,16 @@ main(int argc, char* argv[])
         MakeState(TER, ter, true, MilliSeconds(200)),
         MakeState(NTN, ntn, false, MilliSeconds(540)),
         NTN);
+    Ask(policy,
+        "NTN slightly faster (TER 100, NTN 97ms)",
+        MakeState(TER, ter, true, MilliSeconds(100)),
+        MakeState(NTN, ntn, true, MilliSeconds(97)),
+        TER);
+    Ask(policy,
+        "NTN much faster (TER 100, NTN 80ms)",
+        MakeState(TER, ter, true, MilliSeconds(100)),
+        MakeState(NTN, ntn, true, MilliSeconds(80)),
+        TER);
     Ask(policy,
         "Both down",
         MakeState(TER, ter, false, MilliSeconds(30)),

@@ -4,11 +4,13 @@ build_lib(
                  model/tntn-mock-access-state-provider.cc
                  model/tntn-access-selection-policy.cc
                  model/tntn-terrestrial-preferred-policy.cc
+                 model/tntn-lowest-delay-policy.cc
     HEADER_FILES model/tntn-access-types.h
                  model/tntn-access-state-provider.h
                  model/tntn-mock-access-state-provider.h
                  model/tntn-access-selection-policy.h
                  model/tntn-terrestrial-preferred-policy.h
+                 model/tntn-lowest-delay-policy.h
     LIBRARIES_TO_LINK ${libcore}
                       ${libnetwork}
     TEST_SOURCES test/tntn-test-suite.cc
