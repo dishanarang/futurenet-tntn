@@ -131,9 +131,8 @@ Time
 TntnMockAccessStateProvider::DelayUntil(Time at)
 {
     NS_ABORT_MSG_IF(at < Simulator::Now(),
-                    "Cannot schedule a change in the past (at=" << at.As(Time::S) << ", now="
-                                                                << Simulator::Now().As(Time::S)
-                                                                << ")");
+                    "Cannot schedule a change in the past (at="
+                        << at.As(Time::S) << ", now=" << Simulator::Now().As(Time::S) << ")");
     return at - Simulator::Now();
 }
 

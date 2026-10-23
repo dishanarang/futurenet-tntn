@@ -96,13 +96,13 @@ TntnReasonToString(TntnReason r)
  */
 struct TntnAccessState
 {
-    uint32_t accessId{0};                            //!< Access identifier within the node
+    uint32_t accessId{0};                             //!< Access identifier within the node
     TntnAccessType type{TntnAccessType::TERRESTRIAL}; //!< Network kind
-    bool available{false};                           //!< Whether the access can carry traffic now
-    Time delay{Seconds(0)};                          //!< One-way delay estimate
-    double lossRate{0.0};                            //!< Packet loss ratio, [0,1]
-    DataRate rate{0};                                //!< Available/nominal data rate
-    double load{0.0};                                //!< Normalized load, [0,1]
+    bool available{false};                            //!< Whether the access can carry traffic now
+    Time delay{Seconds(0)};                           //!< One-way delay estimate
+    double lossRate{0.0};                             //!< Packet loss ratio, [0,1]
+    DataRate rate{0};                                 //!< Available/nominal data rate
+    double load{0.0};                                 //!< Normalized load, [0,1]
 };
 
 /**
