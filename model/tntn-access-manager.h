@@ -158,6 +158,12 @@ class TntnAccessManager : public Object
      * @return the states, in registration order
      */
     const std::vector<TntnAccessState>& GetLastAccessStates() const;
+    /**
+     * Get the provider of a registered access, e.g. to script a mock.
+     * @param accessId access id
+     * @return the provider, or nullptr if not registered
+     */
+    Ptr<TntnAccessStateProvider> GetAccessProvider(uint32_t accessId) const;
 
   protected:
     void DoDispose() override;
@@ -184,12 +190,6 @@ class TntnAccessManager : public Object
     void StartHandover(uint32_t newAccessId, TntnReason reason);
     /// Finish the handover started by StartHandover().
     void CompleteHandover();
-    /**
-     * Find the provider of a registered access.
-     * @param accessId access id
-     * @return the provider, or nullptr if not registered
-     */
-    Ptr<TntnAccessStateProvider> FindProvider(uint32_t accessId) const;
 
     Time m_decisionInterval; //!< Time between periodic evaluations
     Time m_minDwellTime;     //!< Minimum time on an access before an optional switch
