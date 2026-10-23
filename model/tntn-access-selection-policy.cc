@@ -14,9 +14,8 @@ NS_OBJECT_ENSURE_REGISTERED(TntnAccessSelectionPolicy);
 TypeId
 TntnAccessSelectionPolicy::GetTypeId()
 {
-    static TypeId tid = TypeId("ns3::TntnAccessSelectionPolicy")
-                            .SetParent<Object>()
-                            .SetGroupName("FuturenetTntn");
+    static TypeId tid =
+        TypeId("ns3::TntnAccessSelectionPolicy").SetParent<Object>().SetGroupName("FuturenetTntn");
     return tid;
 }
 
@@ -48,11 +47,10 @@ TntnAccessSelectionPolicy::Select(const std::vector<TntnAccessState>& candidates
     TntnAccessDecision decision = DoSelect(available, currentAccessId);
 
     // Guard against a buggy subclass: the chosen id must be one we offered.
-    bool offered = std::any_of(available.begin(),
-                               available.end(),
-                               [&decision](const TntnAccessState& s) {
-                                   return s.accessId == decision.selectedAccessId;
-                               });
+    bool offered =
+        std::any_of(available.begin(), available.end(), [&decision](const TntnAccessState& s) {
+            return s.accessId == decision.selectedAccessId;
+        });
     NS_ABORT_MSG_IF(!offered,
                     "Policy " << GetInstanceTypeId().GetName() << " selected access "
                               << decision.selectedAccessId << " which is not available");
