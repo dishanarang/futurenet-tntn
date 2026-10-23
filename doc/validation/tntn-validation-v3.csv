@@ -1,0 +1,7 @@
+policy,parameter,value,ntn_delay_ms,expected_ter_delay_at_switch_ms,expected_switch_s,measured_switch_s,pass
+terrestrial-preferred,MaxAcceptableDelay_ms,100,250,110,1.05,1.05,1
+terrestrial-preferred,MaxAcceptableDelay_ms,150,250,160,6.05,6.05,1
+terrestrial-preferred,MaxAcceptableDelay_ms,200,250,210,11.05,11.05,1
+lowest-delay,HysteresisFraction,0,250,260,16.05,16.05,1
+lowest-delay,HysteresisFraction,0.05,250,270,17.05,17.05,1
+lowest-delay,HysteresisFraction,0.2,250,320,22.05,22.05,1
