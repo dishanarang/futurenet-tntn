@@ -1,5 +1,5 @@
 build_lib_example(
-    NAME futurenet-tntn-example
-    SOURCE_FILES futurenet-tntn-example.cc
+    NAME tntn-example-basic
+    SOURCE_FILES tntn-example-basic.cc
     LIBRARIES_TO_LINK ${libfuturenet-tntn}
 )
