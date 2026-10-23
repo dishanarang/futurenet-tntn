@@ -1,0 +1,5 @@
+min_dwell_s,ntn_switch_s,restore_s,expected_return_s,measured_return_s,handovers,pass
+0,11.05,12.5,13.05,13.05,3,1
+2,11.05,12.5,14.05,14.05,3,1
+5,11.05,12.5,17.05,17.05,3,1
+10,11.05,12.5,22.05,22.05,3,1

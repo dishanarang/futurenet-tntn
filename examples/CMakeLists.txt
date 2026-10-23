@@ -9,3 +9,9 @@ build_lib_example(
     SOURCE_FILES tntn-policy-demo.cc
     LIBRARIES_TO_LINK ${libfuturenet-tntn}
 )
+
+build_lib_example(
+    NAME tntn-validation
+    SOURCE_FILES tntn-validation.cc
+    LIBRARIES_TO_LINK ${libfuturenet-tntn}
+)
