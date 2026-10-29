@@ -1,10 +1,19 @@
+#include "ns3/channel.h"
 #include "ns3/double.h"
 #include "ns3/enum.h"
+#include "ns3/error-model.h"
+#include "ns3/internet-stack-helper.h"
+#include "ns3/ipv4-address-helper.h"
+#include "ns3/ipv4.h"
+#include "ns3/point-to-point-helper.h"
+#include "ns3/pointer.h"
 #include "ns3/simulator.h"
+#include "ns3/string.h"
 #include "ns3/test.h"
 #include "ns3/tntn-access-manager.h"
 #include "ns3/tntn-lowest-delay-policy.h"
 #include "ns3/tntn-mock-access-state-provider.h"
+#include "ns3/tntn-point-to-point-access-state-provider.h"
 #include "ns3/tntn-terrestrial-preferred-policy.h"
 
 using namespace ns3;
@@ -799,6 +808,107 @@ class TntnManagerAttributesTestCase : public TestCase
 
 /**
  * @ingroup futurenet-tntn-tests
+ * T6 (guidelines section 9): the point-to-point provider reports a real ns-3
+ * link correctly, follows live changes, and drives the manager.
+ */
+class TntnPointToPointProviderTestCase : public TestCase
+{
+  public:
+    TntnPointToPointProviderTestCase()
+        : TestCase("T6 point-to-point provider reads a real ns-3 link and drives the manager")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        // Two nodes joined by two links: link A plays terrestrial, link B NTN.
+        NodeContainer nodes;
+        nodes.Create(2);
+        PointToPointHelper p2p;
+        p2p.SetDeviceAttribute("DataRate", StringValue("50Mbps"));
+        p2p.SetChannelAttribute("Delay", StringValue("15ms"));
+        NetDeviceContainer linkA = p2p.Install(nodes);
+        p2p.SetDeviceAttribute("DataRate", StringValue("10Mbps"));
+        p2p.SetChannelAttribute("Delay", StringValue("270ms"));
+        NetDeviceContainer linkB = p2p.Install(nodes);
+
+        InternetStackHelper stack;
+        stack.Install(nodes);
+        Ipv4AddressHelper address;
+        address.SetBase("10.1.1.0", "255.255.255.0");
+        address.Assign(linkA);
+        address.SetBase("10.2.1.0", "255.255.255.0");
+        address.Assign(linkB);
+
+        // 2% packet loss on link B, applied by the far end's receive error model.
+        auto errors = CreateObject<RateErrorModel>();
+        errors->SetUnit(RateErrorModel::ERROR_UNIT_PACKET);
+        errors->SetRate(0.02);
+        linkB.Get(1)->SetAttribute("ReceiveErrorModel", PointerValue(errors));
+
+        auto ter = CreateObject<TntnPointToPointAccessStateProvider>();
+        ter->SetDevice(DynamicCast<PointToPointNetDevice>(linkA.Get(0)));
+        auto ntn = CreateObject<TntnPointToPointAccessStateProvider>();
+        ntn->SetAttribute("AccessType", EnumValue(TntnAccessType::NTN));
+        ntn->SetDevice(DynamicCast<PointToPointNetDevice>(linkB.Get(0)));
+
+        // The report card matches the link configuration.
+        TntnAccessState a = ter->GetAccessState(TER);
+        NS_TEST_ASSERT_MSG_EQ(a.accessId, TER, "access id not copied");
+        NS_TEST_ASSERT_MSG_EQ((a.type == TntnAccessType::TERRESTRIAL), true, "wrong type");
+        NS_TEST_ASSERT_MSG_EQ(a.available, true, "link A should be available");
+        NS_TEST_ASSERT_MSG_EQ(a.delay, MilliSeconds(15), "link A delay");
+        NS_TEST_ASSERT_MSG_EQ(a.rate, DataRate("50Mbps"), "link A rate");
+        NS_TEST_ASSERT_MSG_EQ_TOL(a.lossRate, 0.0, 1e-12, "link A has no error model");
+        NS_TEST_ASSERT_MSG_EQ_TOL(a.load, 0.0, 1e-12, "idle link should have zero load");
+
+        TntnAccessState b = ntn->GetAccessState(NTN);
+        NS_TEST_ASSERT_MSG_EQ((b.type == TntnAccessType::NTN), true, "AccessType attribute");
+        NS_TEST_ASSERT_MSG_EQ(b.delay, MilliSeconds(270), "link B delay");
+        NS_TEST_ASSERT_MSG_EQ(b.rate, DataRate("10Mbps"), "link B rate");
+        NS_TEST_ASSERT_MSG_EQ_TOL(b.lossRate, 0.02, 1e-12, "link B loss from error model");
+
+        // Live changes to the link are visible on the next read.
+        linkA.Get(0)->GetChannel()->SetAttribute("Delay", TimeValue(MilliSeconds(200)));
+        NS_TEST_ASSERT_MSG_EQ(ter->GetAccessState(TER).delay,
+                              MilliSeconds(200),
+                              "delay change not seen");
+        linkA.Get(0)->GetChannel()->SetAttribute("Delay", TimeValue(MilliSeconds(15)));
+
+        Ptr<Ipv4> ipv4 = nodes.Get(0)->GetObject<Ipv4>();
+        int32_t ifA = ipv4->GetInterfaceForDevice(linkA.Get(0));
+        ipv4->SetDown(ifA);
+        NS_TEST_ASSERT_MSG_EQ(ter->GetAccessState(TER).available,
+                              false,
+                              "interface down should mean unavailable");
+        ipv4->SetUp(ifA);
+        NS_TEST_ASSERT_MSG_EQ(ter->GetAccessState(TER).available,
+                              true,
+                              "interface up should mean available");
+
+        // The manager reacts to a real interface outage.
+        auto manager = CreateObject<TntnAccessManager>();
+        manager->AddAccess(TER, ter);
+        manager->AddAccess(NTN, ntn);
+        manager->SetPolicy(CreateObject<TntnTerrestrialPreferredPolicy>());
+        manager->Start();
+        uint32_t beforeOutage = 0;
+        Simulator::Schedule(Seconds(1.5), [&]() {
+            beforeOutage = manager->GetCurrentAccess();
+            ipv4->SetDown(ifA);
+        });
+        Simulator::Stop(Seconds(3));
+        Simulator::Run();
+
+        NS_TEST_ASSERT_MSG_EQ(beforeOutage, TER, "terrestrial not selected before outage");
+        NS_TEST_ASSERT_MSG_EQ(manager->GetCurrentAccess(), NTN, "no fallback to NTN link");
+        Simulator::Destroy();
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
  * Test suite for module futurenet-tntn.
  */
 class TntnTestSuite : public TestSuite
@@ -820,6 +930,7 @@ class TntnTestSuite : public TestSuite
         AddTestCase(new TntnManagerForceAccessTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnManagerRepeatabilityTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnManagerAttributesTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnPointToPointProviderTestCase, TestCase::Duration::QUICK);
     }
 };
 
