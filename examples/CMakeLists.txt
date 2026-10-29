@@ -15,3 +15,12 @@ build_lib_example(
     SOURCE_FILES tntn-validation.cc
     LIBRARIES_TO_LINK ${libfuturenet-tntn}
 )
+
+build_lib_example(
+    NAME tntn-example-integration
+    SOURCE_FILES tntn-example-integration.cc
+    LIBRARIES_TO_LINK ${libfuturenet-tntn}
+                      ${libapplications}
+                      ${libinternet}
+                      ${libpoint-to-point}
+)
