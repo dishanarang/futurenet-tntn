@@ -29,6 +29,7 @@ orchestration, not on detailed cellular handover signalling.
 | `TntnAccessSelectionPolicy` | Policy base class; never offers an unavailable access to a subclass |
 | `TntnTerrestrialPreferredPolicy` | Terrestrial if it meets delay/loss/rate constraints, else NTN |
 | `TntnLowestDelayPolicy` | Lowest delay, with hysteresis |
+| `TntnWeightedScorePolicy` | Highest weighted score of delay, loss, rate and load, with hysteresis |
 | `TntnAccessManager` | Periodic evaluation, dwell time, handover execution, traces |
 | `TntnHelper` | Installs managers on a `NodeContainer` and enables CSV tracing |
 
@@ -101,7 +102,7 @@ Run from the ns-3 root.
 Useful options:
 
 ```
---policy=terrestrial | lowest-delay
+--policy=terrestrial | lowest-delay | weighted
 --RngRun=2                                         # another random scenario (basic example)
 --ns3::TntnAccessManager::MinDwellTime=0s          # any attribute can be set this way
 --ns3::TntnLowestDelayPolicy::HysteresisFraction=0.2
@@ -113,9 +114,10 @@ Useful options:
 ./test.py -s futurenet-tntn
 ```
 
-14 test cases: SRS T01–T06, default values and attribute ranges, scheduled
-mock changes, `ForceAccess`, repeatability of identical runs, and an
-integration test with a real ns-3 point-to-point link.
+18 test cases: SRS T01–T06, default values and attribute ranges, scheduled
+mock changes, `ForceAccess`, repeatability of identical runs, an
+integration test with a real ns-3 point-to-point link, and the weighted-score
+formula, weight normalization and hysteresis (FR-09).
 
 ## Output
 
@@ -159,6 +161,13 @@ Project defaults from SRS §5 (not 3GPP values). Full table in the design docume
 | `TntnTerrestrialPreferredPolicy::MaxAcceptableLoss` | 0.10 | 0 – 1 |
 | `TntnTerrestrialPreferredPolicy::MinAcceptableRate` | 1 Mbit/s | 0 – 10 Gbit/s |
 | `TntnLowestDelayPolicy::HysteresisFraction` | 0.05 | 0 – 0.5 |
+| `TntnWeightedScorePolicy::DelayWeight` | 0.40 | ≥ 0 |
+| `TntnWeightedScorePolicy::LossWeight` | 0.20 | ≥ 0 |
+| `TntnWeightedScorePolicy::RateWeight` | 0.20 | ≥ 0 |
+| `TntnWeightedScorePolicy::LoadWeight` | 0.20 | ≥ 0 |
+| `TntnWeightedScorePolicy::HysteresisFraction` | 0.05 | 0 – 0.5 |
+
+Weighted-score weights are normalized by their sum, so they need not add up to 1.
 
 ## Integrating other modules
 
@@ -185,8 +194,10 @@ Project defaults from SRS §5 (not 3GPP values). Full table in the design docume
 - `TntnPointToPointAccessStateProvider` reports propagation delay only, not
   queueing or transmission delay, and loss only from a packet-unit
   `RateErrorModel` on the far end.
-- Not implemented yet: `WeightedScorePolicy` (FR-09, recommended) and
-  make-before-break switching (FR-10, recommended).
+- Not implemented yet: make-before-break switching (FR-10, recommended).
+- `TntnWeightedScorePolicy` normalizes delay and rate relative to the accesses
+  being compared, so a score is only meaningful next to the others from the
+  same evaluation.
 - Out of scope per SRS §11: 5G RRC signalling, measurement reports,
   core-network mobility, 3GPP compliance claims, satellite PHY.
 - Parameter defaults are project teaching values, not 3GPP-mandated values.

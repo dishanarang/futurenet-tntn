@@ -15,6 +15,7 @@
 #include "ns3/tntn-mock-access-state-provider.h"
 #include "ns3/tntn-point-to-point-access-state-provider.h"
 #include "ns3/tntn-terrestrial-preferred-policy.h"
+#include "ns3/tntn-weighted-score-policy.h"
 
 using namespace ns3;
 
@@ -909,6 +910,194 @@ class TntnPointToPointProviderTestCase : public TestCase
 
 /**
  * @ingroup futurenet-tntn-tests
+ * Build the terrestrial/NTN pair used by the weighted-score tests.
+ * @param terLoss terrestrial loss ratio
+ * @param terLoad terrestrial load
+ * @return terrestrial 30 ms / 50 Mbit/s and NTN 540 ms / 10 Mbit/s / 2% loss / 0.2 load
+ */
+static std::vector<TntnAccessState>
+WeightedPair(double terLoss, double terLoad)
+{
+    TntnAccessState ter = MakeState(TER, TntnAccessType::TERRESTRIAL, true, 30, terLoss, 50);
+    ter.load = terLoad;
+    TntnAccessState ntn = MakeState(NTN, TntnAccessType::NTN, true, 540, 0.02, 10);
+    ntn.load = 0.2;
+    return {ter, ntn};
+}
+
+/**
+ * @ingroup futurenet-tntn-tests
+ * FR-09: scores follow the documented formula, and weights are normalized.
+ */
+class TntnWeightedScoreFormulaTestCase : public TestCase
+{
+  public:
+    TntnWeightedScoreFormulaTestCase()
+        : TestCase("FR-09 weighted score formula and weight normalization")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        auto policy = CreateObject<TntnWeightedScorePolicy>();
+        std::vector<TntnAccessState> c = WeightedPair(0.01, 0.2);
+
+        // Marks: TER delay 1, loss 0.99, rate 1, load 0.8
+        //        NTN delay 30/540, loss 0.98, rate 10/50, load 0.8
+        const double terExpected = 0.4 * 1.0 + 0.2 * 0.99 + 0.2 * 1.0 + 0.2 * 0.8;
+        const double ntnExpected = 0.4 * (30.0 / 540.0) + 0.2 * 0.98 + 0.2 * 0.2 + 0.2 * 0.8;
+        std::vector<double> s = policy->ComputeScores(c);
+        NS_TEST_ASSERT_MSG_EQ_TOL(s.at(0), terExpected, 1e-9, "terrestrial score");
+        NS_TEST_ASSERT_MSG_EQ_TOL(s.at(1), ntnExpected, 1e-9, "NTN score");
+
+        TntnAccessDecision d = policy->Select(c, TNTN_NO_ACCESS);
+        NS_TEST_ASSERT_MSG_EQ(d.selectedAccessId, TER, "highest score not selected");
+        NS_TEST_ASSERT_MSG_EQ_TOL(d.score, terExpected, 1e-9, "decision score");
+
+        // Weights 4/2/2/2 have the same proportions as 0.4/0.2/0.2/0.2.
+        policy->SetAttribute("DelayWeight", DoubleValue(4));
+        policy->SetAttribute("LossWeight", DoubleValue(2));
+        policy->SetAttribute("RateWeight", DoubleValue(2));
+        policy->SetAttribute("LoadWeight", DoubleValue(2));
+        std::vector<double> scaled = policy->ComputeScores(c);
+        NS_TEST_ASSERT_MSG_EQ_TOL(scaled.at(0), terExpected, 1e-9, "weights not normalized");
+        NS_TEST_ASSERT_MSG_EQ_TOL(scaled.at(1), ntnExpected, 1e-9, "weights not normalized");
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
+ * FR-09: the weights decide which metric dominates.
+ */
+class TntnWeightedScoreWeightsTestCase : public TestCase
+{
+  public:
+    TntnWeightedScoreWeightsTestCase()
+        : TestCase("FR-09 changing the weights changes the selection")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        // Terrestrial is fast but loses 30% and is nearly saturated.
+        std::vector<TntnAccessState> c = WeightedPair(0.3, 0.95);
+
+        auto delayFirst = CreateObject<TntnWeightedScorePolicy>();
+        NS_TEST_ASSERT_MSG_EQ(delayFirst->Select(c, TNTN_NO_ACCESS).selectedAccessId,
+                              TER,
+                              "default weights should favour the much faster access");
+
+        auto lossFirst = CreateObject<TntnWeightedScorePolicy>();
+        lossFirst->SetAttribute("DelayWeight", DoubleValue(0.1));
+        lossFirst->SetAttribute("LossWeight", DoubleValue(0.8));
+        lossFirst->SetAttribute("RateWeight", DoubleValue(0.05));
+        lossFirst->SetAttribute("LoadWeight", DoubleValue(0.05));
+        NS_TEST_ASSERT_MSG_EQ(lossFirst->Select(c, TNTN_NO_ACCESS).selectedAccessId,
+                              NTN,
+                              "loss-heavy weights should favour the reliable access");
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
+ * Weighted-score hysteresis and reasons.
+ */
+class TntnWeightedScoreHysteresisTestCase : public TestCase
+{
+  public:
+    TntnWeightedScoreHysteresisTestCase()
+        : TestCase("Weighted-score hysteresis blocks small score improvements")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        // Identical accesses except load, so score = 0.8 + 0.2 * (1 - load).
+        auto pair = [](double terLoad, double ntnLoad) {
+            TntnAccessState ter = MakeState(TER, TntnAccessType::TERRESTRIAL, true, 100);
+            ter.load = terLoad;
+            TntnAccessState ntn = MakeState(NTN, TntnAccessType::NTN, true, 100);
+            ntn.load = ntnLoad;
+            return std::vector<TntnAccessState>{ter, ntn};
+        };
+        auto policy = CreateObject<TntnWeightedScorePolicy>();
+
+        // 0.96 -> 1.00 is about 4% better: blocked by the default 5%.
+        TntnAccessDecision d = policy->Select(pair(0.2, 0.0), TER);
+        NS_TEST_ASSERT_MSG_EQ(d.selectedAccessId, TER, "4% improvement should not switch");
+        NS_TEST_ASSERT_MSG_EQ(TntnReasonToString(d.reason),
+                              TntnReasonToString(TntnReason::NONE),
+                              "wrong reason when staying");
+
+        // 0.88 -> 1.00 is about 14% better: switch.
+        d = policy->Select(pair(0.6, 0.0), TER);
+        NS_TEST_ASSERT_MSG_EQ(d.selectedAccessId, NTN, "14% improvement should switch");
+        NS_TEST_ASSERT_MSG_EQ(TntnReasonToString(d.reason),
+                              TntnReasonToString(TntnReason::BETTER_CANDIDATE),
+                              "wrong reason when switching");
+
+        // With no hysteresis the 4% improvement is enough.
+        policy->SetAttribute("HysteresisFraction", DoubleValue(0.0));
+        NS_TEST_ASSERT_MSG_EQ(policy->Select(pair(0.2, 0.0), TER).selectedAccessId,
+                              NTN,
+                              "any improvement switches at 0 hysteresis");
+
+        // Current access down: switch at once whatever the scores.
+        policy->SetAttribute("HysteresisFraction", DoubleValue(0.5));
+        auto c = pair(0.2, 0.0);
+        c[0].available = false;
+        d = policy->Select(c, TER);
+        NS_TEST_ASSERT_MSG_EQ(d.selectedAccessId, NTN, "unavailable current not left");
+        NS_TEST_ASSERT_MSG_EQ(TntnReasonToString(d.reason),
+                              TntnReasonToString(TntnReason::CURRENT_UNAVAILABLE),
+                              "wrong reason when current is unavailable");
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
+ * Weighted-score defaults and attribute ranges (SRS section 5).
+ */
+class TntnWeightedScoreAttributesTestCase : public TestCase
+{
+  public:
+    TntnWeightedScoreAttributesTestCase()
+        : TestCase("Weighted-score policy defaults and attribute ranges")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        auto policy = CreateObject<TntnWeightedScorePolicy>();
+        const std::pair<const char*, double> defaults[] = {{"DelayWeight", 0.40},
+                                                           {"LossWeight", 0.20},
+                                                           {"RateWeight", 0.20},
+                                                           {"LoadWeight", 0.20},
+                                                           {"HysteresisFraction", 0.05}};
+        for (const auto& [name, value] : defaults)
+        {
+            DoubleValue v;
+            policy->GetAttribute(name, v);
+            NS_TEST_ASSERT_MSG_EQ_TOL(v.Get(), value, 1e-12, "default " << name);
+        }
+        NS_TEST_ASSERT_MSG_EQ(policy->SetAttributeFailSafe("DelayWeight", DoubleValue(-0.1)),
+                              false,
+                              "negative weight should be rejected");
+        NS_TEST_ASSERT_MSG_EQ(policy->SetAttributeFailSafe("LoadWeight", DoubleValue(0.0)),
+                              true,
+                              "zero weight should be accepted");
+        NS_TEST_ASSERT_MSG_EQ(policy->SetAttributeFailSafe("HysteresisFraction", DoubleValue(0.51)),
+                              false,
+                              "HysteresisFraction above 0.5 should be rejected");
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
  * Test suite for module futurenet-tntn.
  */
 class TntnTestSuite : public TestSuite
@@ -931,6 +1120,10 @@ class TntnTestSuite : public TestSuite
         AddTestCase(new TntnManagerRepeatabilityTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnManagerAttributesTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnPointToPointProviderTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnWeightedScoreFormulaTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnWeightedScoreWeightsTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnWeightedScoreHysteresisTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnWeightedScoreAttributesTestCase, TestCase::Duration::QUICK);
     }
 };
 

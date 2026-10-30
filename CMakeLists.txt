@@ -5,6 +5,7 @@ build_lib(
                  model/tntn-access-selection-policy.cc
                  model/tntn-terrestrial-preferred-policy.cc
                  model/tntn-lowest-delay-policy.cc
+                 model/tntn-weighted-score-policy.cc
                  model/tntn-access-manager.cc
                  model/tntn-point-to-point-access-state-provider.cc
                  helper/tntn-helper.cc
@@ -14,6 +15,7 @@ build_lib(
                  model/tntn-access-selection-policy.h
                  model/tntn-terrestrial-preferred-policy.h
                  model/tntn-lowest-delay-policy.h
+                 model/tntn-weighted-score-policy.h
                  model/tntn-access-manager.h
                  model/tntn-point-to-point-access-state-provider.h
                  helper/tntn-helper.h
