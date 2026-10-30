@@ -34,8 +34,12 @@ namespace ns3
  * initial selection and forced switches are never blocked, because staying
  * would leave the node without a working access or ignore an explicit order.
  *
- * While a handover is in progress GetCurrentAccess() still returns the old
- * access and periodic decisions are skipped.
+ * Handover execution (M02-FR-10): by default a handover is break-before-make,
+ * so the node is detached (GetCurrentAccess() returns TNTN_NO_ACCESS) from
+ * HandoverStart until HandoverComplete. With MakeBeforeBreak enabled, the old
+ * access stays current until the new one is ready, provided the old access is
+ * still available when the handover starts; a failed access cannot be kept.
+ * Periodic decisions are skipped while a handover is in progress.
  */
 class TntnAccessManager : public Object
 {
@@ -145,7 +149,8 @@ class TntnAccessManager : public Object
 
     /**
      * Get the access in use.
-     * @return the access id, or TNTN_NO_ACCESS before the first handover completes
+     * @return the access id, or TNTN_NO_ACCESS before the first handover
+     *         completes and while detached during a break-before-make handover
      */
     uint32_t GetCurrentAccess() const;
     /**
@@ -190,10 +195,17 @@ class TntnAccessManager : public Object
     void StartHandover(uint32_t newAccessId, TntnReason reason);
     /// Finish the handover started by StartHandover().
     void CompleteHandover();
+    /**
+     * Ask an access's provider whether it is available right now.
+     * @param accessId registered access id
+     * @return true if available
+     */
+    bool IsAvailableNow(uint32_t accessId) const;
 
     Time m_decisionInterval; //!< Time between periodic evaluations
     Time m_minDwellTime;     //!< Minimum time on an access before an optional switch
     Time m_handoverDelay;    //!< Time from handover start to completion
+    bool m_makeBeforeBreak;  //!< Keep the old access until the new one is ready
 
     uint32_t m_nodeId{0}; //!< Id reported in traces
     std::vector<std::pair<uint32_t, Ptr<TntnAccessStateProvider>>>
@@ -202,13 +214,14 @@ class TntnAccessManager : public Object
     std::vector<TntnAccessState> m_lastStates; //!< States read at the last evaluation
     Ptr<TntnAccessSelectionPolicy> m_policy;   //!< Selection policy
 
-    uint32_t m_currentAccess{TNTN_NO_ACCESS}; //!< Access in use
-    uint32_t m_targetAccess{TNTN_NO_ACCESS};  //!< Target of the handover in progress
-    bool m_handoverInProgress{false};         //!< Whether a handover is in progress
-    bool m_hasSwitched{false};                //!< Whether any handover has completed
-    Time m_lastHandoverTime;                  //!< Completion time of the last handover
-    EventId m_evaluateEvent;                  //!< Next periodic evaluation
-    EventId m_completeEvent;                  //!< Pending handover completion
+    uint32_t m_currentAccess{TNTN_NO_ACCESS};  //!< Access in use
+    uint32_t m_targetAccess{TNTN_NO_ACCESS};   //!< Target of the handover in progress
+    uint32_t m_previousAccess{TNTN_NO_ACCESS}; //!< Access before the handover in progress
+    bool m_handoverInProgress{false};          //!< Whether a handover is in progress
+    bool m_hasSwitched{false};                 //!< Whether any handover has completed
+    Time m_lastHandoverTime;                   //!< Completion time of the last handover
+    EventId m_evaluateEvent;                   //!< Next periodic evaluation
+    EventId m_completeEvent;                   //!< Pending handover completion
 
     /// Fired after every evaluation (M02 SRS section 7)
     TracedCallback<uint32_t, uint32_t, uint32_t, TntnReason> m_decisionEvaluatedTrace;
