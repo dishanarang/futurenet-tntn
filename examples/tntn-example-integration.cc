@@ -9,8 +9,11 @@
  * Each UE sends UDP packets to the server. Its TntnAccessManager reads both
  * links through TntnPointToPointAccessStateProvider. When a handover
  * completes, the UE's default route is moved to the new link, so traffic
- * really changes path (M02-FR-07). The server records the one-way delay and
- * the path of every packet.
+ * really changes path (M02-FR-07). With break-before-make (the default) the
+ * route is removed when the handover starts, so packets sent during
+ * HandoverExecutionDelay are lost; with --makeBeforeBreak=true they keep using
+ * the old link if it still works (M02-FR-10). The server records the one-way
+ * delay and the path of every packet.
  *
  * Scenario on every UE (offset by i seconds for UE i):
  *   20.5-23.5 s  terrestrial IPv4 interface down -> fallback to NTN; return held by dwell
@@ -30,6 +33,7 @@
  *
  *   ./ns3 run tntn-example-integration
  *   ./ns3 run "tntn-example-integration --numUes=5 --policy=lowest-delay"
+ *   ./ns3 run "tntn-example-integration --makeBeforeBreak=true"
  */
 
 #include "ns3/applications-module.h"
@@ -59,9 +63,54 @@ static constexpr uint16_t BASE_PORT = 9000;
 struct UeRoutes
 {
     Ptr<Node> ue;                         //!< UE node
+    Ptr<TntnAccessManager> manager;       //!< UE's access manager
     std::map<uint32_t, Ipv4Address> gw;   //!< Next hop per access id
     std::map<uint32_t, uint32_t> ifIndex; //!< UE IPv4 interface per access id
 };
+
+/**
+ * Remove every default route of a UE.
+ * @param ue the UE
+ * @return the UE's static routing table
+ */
+static Ptr<Ipv4StaticRouting>
+RemoveDefaultRoutes(Ptr<Node> ue)
+{
+    Ipv4StaticRoutingHelper helper;
+    Ptr<Ipv4StaticRouting> table = helper.GetStaticRouting(ue->GetObject<Ipv4>());
+    for (uint32_t i = table->GetNRoutes(); i > 0; --i)
+    {
+        if (table->GetRoute(i - 1).IsDefault())
+        {
+            table->RemoveRoute(i - 1);
+        }
+    }
+    return table;
+}
+
+/**
+ * Detach the UE from the network if the manager released the old access.
+ * The manager is already detached when this trace fires, unless it kept the
+ * old access for make-before-break.
+ * @param routes the UE's routing information
+ * @param nodeId node id
+ * @param oldId previous access
+ * @param newId new access
+ * @param reason reason
+ */
+static void
+OnHandoverStart(UeRoutes* routes,
+                uint32_t nodeId,
+                uint32_t oldId,
+                uint32_t newId,
+                TntnReason reason)
+{
+    if (routes->manager->GetCurrentAccess() == TNTN_NO_ACCESS)
+    {
+        RemoveDefaultRoutes(routes->ue);
+        NS_LOG_INFO("UE " << nodeId << " detached during handover");
+    }
+}
 
 /**
  * Point the UE's default route at the access that just became current.
@@ -74,16 +123,8 @@ struct UeRoutes
 static void
 OnHandoverComplete(UeRoutes* routes, uint32_t nodeId, uint32_t oldId, uint32_t newId)
 {
-    Ipv4StaticRoutingHelper helper;
-    Ptr<Ipv4StaticRouting> table = helper.GetStaticRouting(routes->ue->GetObject<Ipv4>());
-    for (uint32_t i = table->GetNRoutes(); i > 0; --i)
-    {
-        if (table->GetRoute(i - 1).IsDefault())
-        {
-            table->RemoveRoute(i - 1);
-        }
-    }
-    table->SetDefaultRoute(routes->gw.at(newId), routes->ifIndex.at(newId));
+    RemoveDefaultRoutes(routes->ue)
+        ->SetDefaultRoute(routes->gw.at(newId), routes->ifIndex.at(newId));
     NS_LOG_INFO("UE " << nodeId << " default route now via access " << newId);
 }
 
@@ -161,14 +202,19 @@ main(int argc, char* argv[])
     Time simulationTime = Seconds(60);
     std::string policy = "terrestrial";
     std::string outputPrefix = "tntn-example-integration";
-    Time packetInterval = MilliSeconds(100);
+    // Short enough that a 50 ms handover interruption loses several packets.
+    Time packetInterval = MilliSeconds(10);
+    bool makeBeforeBreak = false;
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("numUes", "Number of UEs", numUes);
     cmd.AddValue("simulationTime", "Simulation duration", simulationTime);
-    cmd.AddValue("policy", "Selection policy: terrestrial or lowest-delay", policy);
+    cmd.AddValue("policy", "Selection policy: terrestrial, lowest-delay or weighted", policy);
     cmd.AddValue("outputPrefix", "Prefix of the CSV output files", outputPrefix);
     cmd.AddValue("packetInterval", "Time between UDP packets of a UE", packetInterval);
+    cmd.AddValue("makeBeforeBreak",
+                 "Keep the old access during a handover when it still works",
+                 makeBeforeBreak);
     cmd.Parse(argc, argv);
 
     NS_ABORT_MSG_IF(numUes == 0 || numUes > 250, "numUes must be in [1,250]");
@@ -237,9 +283,14 @@ main(int argc, char* argv[])
     {
         tntn.SetPolicy("ns3::TntnLowestDelayPolicy");
     }
+    else if (policy == "weighted")
+    {
+        tntn.SetPolicy("ns3::TntnWeightedScorePolicy");
+    }
     else
     {
-        NS_ABORT_MSG("Unknown --policy '" << policy << "'; use terrestrial or lowest-delay");
+        NS_ABORT_MSG("Unknown --policy '" << policy
+                                          << "'; use terrestrial, lowest-delay or weighted");
     }
     tntn.AddAccess(TER,
                    "ns3::TntnPointToPointAccessStateProvider",
@@ -249,6 +300,7 @@ main(int argc, char* argv[])
                    "ns3::TntnPointToPointAccessStateProvider",
                    "AccessType",
                    EnumValue(TntnAccessType::NTN));
+    tntn.SetManagerAttribute("MakeBeforeBreak", BooleanValue(makeBeforeBreak));
     std::vector<Ptr<TntnAccessManager>> managers = tntn.Install(ues);
     tntn.EnableTracing(outputPrefix);
 
@@ -259,6 +311,9 @@ main(int argc, char* argv[])
             ->SetDevice(DynamicCast<PointToPointNetDevice>(terDevices[i].Get(0)));
         DynamicCast<TntnPointToPointAccessStateProvider>(managers[i]->GetAccessProvider(NTN))
             ->SetDevice(DynamicCast<PointToPointNetDevice>(ntnDevices[i].Get(0)));
+        routes[i].manager = managers[i];
+        managers[i]->TraceConnectWithoutContext("HandoverStart",
+                                                MakeBoundCallback(&OnHandoverStart, &routes[i]));
         managers[i]->TraceConnectWithoutContext("HandoverComplete",
                                                 MakeBoundCallback(&OnHandoverComplete, &routes[i]));
     }
@@ -319,7 +374,8 @@ main(int argc, char* argv[])
     Simulator::Stop(simulationTime + Seconds(1));
     Simulator::Run();
 
-    std::cout << "UEs: " << numUes << ", policy: " << policy << "\n";
+    std::cout << "UEs: " << numUes << ", policy: " << policy
+              << ", makeBeforeBreak: " << (makeBeforeBreak ? "true" : "false") << "\n";
     for (uint32_t i = 0; i < numUes; ++i)
     {
         std::cout << "  UE " << ues.Get(i)->GetId() << ": sent " << attempts[i] << ", received "

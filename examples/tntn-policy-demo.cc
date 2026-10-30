@@ -5,11 +5,13 @@
  *
  *   ./ns3 run "tntn-policy-demo --policy=terrestrial"
  *   ./ns3 run "tntn-policy-demo --policy=lowest-delay"
+ *   ./ns3 run "tntn-policy-demo --policy=weighted"
  */
 
 #include "ns3/core-module.h"
 #include "ns3/tntn-lowest-delay-policy.h"
 #include "ns3/tntn-terrestrial-preferred-policy.h"
+#include "ns3/tntn-weighted-score-policy.h"
 
 #include <iomanip>
 #include <iostream>
@@ -27,16 +29,18 @@ static constexpr uint32_t NTN = 1;
  * @param type access type
  * @param available availability
  * @param delay one-way delay
+ * @param loss loss ratio
  * @return the state
  */
 static TntnAccessState
-MakeState(uint32_t id, TntnAccessType type, bool available, Time delay)
+MakeState(uint32_t id, TntnAccessType type, bool available, Time delay, double loss = 0.0)
 {
     TntnAccessState s;
     s.accessId = id;
     s.type = type;
     s.available = available;
     s.delay = delay;
+    s.lossRate = loss;
     s.rate = DataRate("50Mbps");
     return s;
 }
@@ -87,7 +91,7 @@ main(int argc, char* argv[])
     std::string policyName = "terrestrial";
 
     CommandLine cmd(__FILE__);
-    cmd.AddValue("policy", "Selection policy: terrestrial or lowest-delay", policyName);
+    cmd.AddValue("policy", "Selection policy: terrestrial, lowest-delay or weighted", policyName);
     cmd.Parse(argc, argv);
 
     // The researcher chooses the policy here; the rest of the program is the same for any policy.
@@ -100,9 +104,14 @@ main(int argc, char* argv[])
     {
         policy = CreateObject<TntnLowestDelayPolicy>();
     }
+    else if (policyName == "weighted")
+    {
+        policy = CreateObject<TntnWeightedScorePolicy>();
+    }
     else
     {
-        NS_ABORT_MSG("Unknown --policy '" << policyName << "'; use terrestrial or lowest-delay");
+        NS_ABORT_MSG("Unknown --policy '" << policyName
+                                          << "'; use terrestrial, lowest-delay or weighted");
     }
 
     const auto ter = TntnAccessType::TERRESTRIAL;
@@ -153,6 +162,11 @@ main(int argc, char* argv[])
         "NTN much faster (TER 100, NTN 80ms)",
         MakeState(TER, ter, true, MilliSeconds(100)),
         MakeState(NTN, ntn, true, MilliSeconds(80)),
+        TER);
+    Ask(policy,
+        "TER 30% loss, NTN 3% faster",
+        MakeState(TER, ter, true, MilliSeconds(100), 0.3),
+        MakeState(NTN, ntn, true, MilliSeconds(97)),
         TER);
     Ask(policy,
         "Both down",
