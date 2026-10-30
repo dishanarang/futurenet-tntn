@@ -64,7 +64,7 @@ main(int argc, char* argv[])
     CommandLine cmd(__FILE__);
     cmd.AddValue("numNodes", "Number of managed nodes", numNodes);
     cmd.AddValue("simulationTime", "Simulation duration", simulationTime);
-    cmd.AddValue("policy", "Selection policy: terrestrial or lowest-delay", policy);
+    cmd.AddValue("policy", "Selection policy: terrestrial, lowest-delay or weighted", policy);
     cmd.AddValue("outputPrefix", "Prefix of the CSV output files", outputPrefix);
     cmd.AddValue("terDelay", "Normal terrestrial one-way delay", terDelay);
     cmd.AddValue("terCongestedDelay", "Terrestrial delay while congested", terCongestedDelay);
@@ -88,9 +88,14 @@ main(int argc, char* argv[])
     {
         tntn.SetPolicy("ns3::TntnLowestDelayPolicy");
     }
+    else if (policy == "weighted")
+    {
+        tntn.SetPolicy("ns3::TntnWeightedScorePolicy");
+    }
     else
     {
-        NS_ABORT_MSG("Unknown --policy '" << policy << "'; use terrestrial or lowest-delay");
+        NS_ABORT_MSG("Unknown --policy '" << policy
+                                          << "'; use terrestrial, lowest-delay or weighted");
     }
     tntn.AddAccess(TER,
                    "ns3::TntnMockAccessStateProvider",
