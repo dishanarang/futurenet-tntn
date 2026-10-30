@@ -35,6 +35,8 @@ orchestration, not on detailed cellular handover signalling.
 
 Design details: [`doc/futurenet-tntn.rst`](doc/futurenet-tntn.rst).
 Validation results: [`doc/validation.md`](doc/validation.md).
+Technical report: [`doc/report.md`](doc/report.md).
+Demonstration steps: [`doc/demo.md`](doc/demo.md).
 
 ## Dependencies
 
