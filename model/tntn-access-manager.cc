@@ -1,6 +1,7 @@
 #include "tntn-access-manager.h"
 
 #include "ns3/abort.h"
+#include "ns3/boolean.h"
 #include "ns3/log.h"
 #include "ns3/simulator.h"
 #include "ns3/trace-source-accessor.h"
@@ -36,6 +37,13 @@ TntnAccessManager::GetTypeId()
                           TimeValue(MilliSeconds(50)),
                           MakeTimeAccessor(&TntnAccessManager::m_handoverDelay),
                           MakeTimeChecker(Seconds(0), Seconds(2)))
+            .AddAttribute("MakeBeforeBreak",
+                          "Keep using the old access until the new one is ready, when the old "
+                          "access is still available at handover start (M02-FR-10). If false, "
+                          "the node is detached during HandoverExecutionDelay.",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&TntnAccessManager::m_makeBeforeBreak),
+                          MakeBooleanChecker())
             .AddTraceSource("DecisionEvaluated",
                             "A periodic or forced evaluation produced a decision.",
                             MakeTraceSourceAccessor(&TntnAccessManager::m_decisionEvaluatedTrace),
@@ -271,7 +279,17 @@ TntnAccessManager::StartHandover(uint32_t newAccessId, TntnReason reason)
     NS_LOG_FUNCTION(this << newAccessId << TntnReasonToString(reason));
     m_handoverInProgress = true;
     m_targetAccess = newAccessId;
-    m_handoverStartTrace(m_nodeId, m_currentAccess, newAccessId, reason);
+    m_previousAccess = m_currentAccess;
+    // The old access can only be kept while it still works.
+    bool keepOld =
+        m_makeBeforeBreak && m_currentAccess != TNTN_NO_ACCESS && IsAvailableNow(m_currentAccess);
+    if (!keepOld)
+    {
+        m_currentAccess = TNTN_NO_ACCESS;
+    }
+    // Fired after detaching, so a listener can read GetCurrentAccess() to
+    // tell break-before-make (detached) from make-before-break (still attached).
+    m_handoverStartTrace(m_nodeId, m_previousAccess, newAccessId, reason);
     m_completeEvent =
         Simulator::Schedule(m_handoverDelay, &TntnAccessManager::CompleteHandover, this);
 }
@@ -280,14 +298,22 @@ void
 TntnAccessManager::CompleteHandover()
 {
     NS_LOG_FUNCTION(this);
-    uint32_t oldAccess = m_currentAccess;
+    uint32_t oldAccess = m_previousAccess;
     m_currentAccess = m_targetAccess;
     m_targetAccess = TNTN_NO_ACCESS;
+    m_previousAccess = TNTN_NO_ACCESS;
     m_handoverInProgress = false;
     m_hasSwitched = true;
     m_lastHandoverTime = Simulator::Now();
     NS_LOG_INFO("Node " << m_nodeId << ": now on access " << m_currentAccess);
     m_handoverCompleteTrace(m_nodeId, oldAccess, m_currentAccess);
+}
+
+bool
+TntnAccessManager::IsAvailableNow(uint32_t accessId) const
+{
+    Ptr<TntnAccessStateProvider> provider = GetAccessProvider(accessId);
+    return provider && provider->GetAccessState(accessId).available;
 }
 
 Ptr<TntnAccessStateProvider>

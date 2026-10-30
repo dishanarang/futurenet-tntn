@@ -1,3 +1,4 @@
+#include "ns3/boolean.h"
 #include "ns3/channel.h"
 #include "ns3/double.h"
 #include "ns3/enum.h"
@@ -629,9 +630,10 @@ class TntnManagerDwellAndTraceTestCase : public TestCase
         NS_TEST_ASSERT_MSG_EQ(at7s5, NTN, "return to terrestrial not blocked by dwell");
         NS_TEST_ASSERT_MSG_EQ(s.manager->GetCurrentAccess(), TER, "never returned to terrestrial");
 
-        // Handover execution: old access stays current until completion.
+        // Handover execution: the failed terrestrial access cannot be kept, so
+        // the node is detached until the handover completes.
         NS_TEST_ASSERT_MSG_EQ(inProgressAt2s02, true, "handover should be in progress at 2.02 s");
-        NS_TEST_ASSERT_MSG_EQ(at2s02, TER, "access changed before handover completed");
+        NS_TEST_ASSERT_MSG_EQ(at2s02, TNTN_NO_ACCESS, "node should be detached during handover");
 
         // T06
         NS_TEST_ASSERT_MSG_EQ(s.starts.size(), 3, "expected 3 handovers");
@@ -715,6 +717,84 @@ class TntnManagerForceAccessTestCase : public TestCase
         NS_TEST_ASSERT_MSG_EQ(s.manager->GetCurrentAccess(), NTN, "dwell ignored after forcing");
 
         Simulator::Destroy();
+    }
+};
+
+/**
+ * @ingroup futurenet-tntn-tests
+ * FR-10: make-before-break keeps the old access during a handover only when
+ * it is enabled and the old access still works.
+ *
+ * Terrestrial is down from 1.5 s to 2.5 s: the 2 s handover leaves a failed
+ * access, the 8 s handover (return after dwell) leaves a working one.
+ */
+class TntnManagerMakeBeforeBreakTestCase : public TestCase
+{
+  public:
+    TntnManagerMakeBeforeBreakTestCase()
+        : TestCase("FR-10 make-before-break only when enabled and old access works")
+    {
+    }
+
+  private:
+    /// Access in use at the probe times
+    struct Probes
+    {
+        uint32_t leavingFailed;  //!< At 2.02 s, leaving failed terrestrial
+        uint32_t leavingWorking; //!< At 8.02 s, leaving working NTN
+        uint32_t after;          //!< At 9 s
+        uint32_t lastOld;        //!< Old access reported by the last HandoverComplete
+    };
+
+    /**
+     * Run the outage scenario.
+     * @param makeBeforeBreak value of the MakeBeforeBreak attribute
+     * @return the probed accesses
+     */
+    static Probes Run(bool makeBeforeBreak)
+    {
+        TntnManagerScenario s;
+        s.manager->SetAttribute("MakeBeforeBreak", BooleanValue(makeBeforeBreak));
+        s.ter->ScheduleAvailable(Seconds(1.5), false);
+        s.ter->ScheduleAvailable(Seconds(2.5), true);
+        s.manager->Start();
+
+        Probes p{};
+        Simulator::Schedule(Seconds(2.02),
+                            [&]() { p.leavingFailed = s.manager->GetCurrentAccess(); });
+        Simulator::Schedule(Seconds(8.02),
+                            [&]() { p.leavingWorking = s.manager->GetCurrentAccess(); });
+        Simulator::Schedule(Seconds(9), [&]() { p.after = s.manager->GetCurrentAccess(); });
+        Simulator::Stop(Seconds(10));
+        Simulator::Run();
+        p.lastOld = s.completes.empty() ? TNTN_NO_ACCESS : s.completes.back().oldId;
+        Simulator::Destroy();
+        return p;
+    }
+
+    void DoRun() override
+    {
+        BooleanValue mbb;
+        CreateObject<TntnAccessManager>()->GetAttribute("MakeBeforeBreak", mbb);
+        NS_TEST_ASSERT_MSG_EQ(mbb.Get(), false, "MakeBeforeBreak default should be false");
+
+        Probes off = Run(false);
+        NS_TEST_ASSERT_MSG_EQ(off.leavingFailed, TNTN_NO_ACCESS, "off: detached from failed");
+        NS_TEST_ASSERT_MSG_EQ(off.leavingWorking,
+                              TNTN_NO_ACCESS,
+                              "off: break-before-make should detach even from a working access");
+        NS_TEST_ASSERT_MSG_EQ(off.after, TER, "off: handover did not complete");
+        NS_TEST_ASSERT_MSG_EQ(off.lastOld, NTN, "off: HandoverComplete old access");
+
+        Probes on = Run(true);
+        NS_TEST_ASSERT_MSG_EQ(on.leavingFailed,
+                              TNTN_NO_ACCESS,
+                              "on: a failed access cannot be kept");
+        NS_TEST_ASSERT_MSG_EQ(on.leavingWorking,
+                              NTN,
+                              "on: working old access should stay current during handover");
+        NS_TEST_ASSERT_MSG_EQ(on.after, TER, "on: handover did not complete");
+        NS_TEST_ASSERT_MSG_EQ(on.lastOld, NTN, "on: HandoverComplete old access");
     }
 };
 
@@ -1117,6 +1197,7 @@ class TntnTestSuite : public TestSuite
         AddTestCase(new TntnLowestDelayAttributesTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnManagerDwellAndTraceTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnManagerForceAccessTestCase, TestCase::Duration::QUICK);
+        AddTestCase(new TntnManagerMakeBeforeBreakTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnManagerRepeatabilityTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnManagerAttributesTestCase, TestCase::Duration::QUICK);
         AddTestCase(new TntnPointToPointProviderTestCase, TestCase::Duration::QUICK);
