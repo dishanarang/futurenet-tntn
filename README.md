@@ -95,7 +95,7 @@ Run from the ns-3 root.
 | Example | Shows | Command |
 |---|---|---|
 | `tntn-example-basic` | 25 nodes × 2 mock accesses, 60 s, random outage and congestion per node; CSV output | `./ns3 run "tntn-example-basic --numNodes=25 --simulationTime=60s"` |
-| `tntn-example-integration` | Real point-to-point links; handover moves the UE's default route; per-packet path and delay | `./ns3 run tntn-example-integration` |
+| `tntn-example-integration` | Real point-to-point links; handover moves the UE's default route; per-packet path and delay; packet loss with and without make-before-break | `./ns3 run "tntn-example-integration --makeBeforeBreak=true"` |
 | `tntn-policy-demo` | One policy answering hand-made situations, printed as a table | `./ns3 run "tntn-policy-demo --policy=lowest-delay"` |
 | `tntn-validation` | Validation cases V1–V3 with expected vs measured times | `./ns3 run "tntn-validation --case=all"` |
 
@@ -114,10 +114,11 @@ Useful options:
 ./test.py -s futurenet-tntn
 ```
 
-18 test cases: SRS T01–T06, default values and attribute ranges, scheduled
-mock changes, `ForceAccess`, repeatability of identical runs, an
-integration test with a real ns-3 point-to-point link, and the weighted-score
-formula, weight normalization and hysteresis (FR-09).
+19 test cases: SRS T01–T06, default values and attribute ranges, scheduled
+mock changes, `ForceAccess`, make-before-break vs break-before-make (FR-10),
+repeatability of identical runs, an integration test with a real ns-3
+point-to-point link, and the weighted-score formula, weight normalization and
+hysteresis (FR-09).
 
 ## Output
 
@@ -157,6 +158,7 @@ Project defaults from SRS §5 (not 3GPP values). Full table in the design docume
 | `TntnAccessManager::DecisionInterval` | 1 s | 100 ms – 10 s |
 | `TntnAccessManager::MinDwellTime` | 5 s | 0 – 60 s |
 | `TntnAccessManager::HandoverExecutionDelay` | 50 ms | 0 – 2 s |
+| `TntnAccessManager::MakeBeforeBreak` | false | bool |
 | `TntnTerrestrialPreferredPolicy::MaxAcceptableDelay` | 150 ms | 1 ms – 5 s |
 | `TntnTerrestrialPreferredPolicy::MaxAcceptableLoss` | 0.10 | 0 – 1 |
 | `TntnTerrestrialPreferredPolicy::MinAcceptableRate` | 1 Mbit/s | 0 – 10 Gbit/s |
@@ -168,6 +170,12 @@ Project defaults from SRS §5 (not 3GPP values). Full table in the design docume
 | `TntnWeightedScorePolicy::HysteresisFraction` | 0.05 | 0 – 0.5 |
 
 Weighted-score weights are normalized by their sum, so they need not add up to 1.
+
+`MakeBeforeBreak` (FR-10): by default a handover is break-before-make, so the
+node has no access (`GetCurrentAccess()` returns `TNTN_NO_ACCESS`) for
+`HandoverExecutionDelay`. When `true`, the old access stays current until the
+new one is ready, provided the old access still works when the handover
+starts; leaving a failed access always interrupts traffic.
 
 ## Integrating other modules
 
@@ -194,7 +202,6 @@ Weighted-score weights are normalized by their sum, so they need not add up to 1
 - `TntnPointToPointAccessStateProvider` reports propagation delay only, not
   queueing or transmission delay, and loss only from a packet-unit
   `RateErrorModel` on the far end.
-- Not implemented yet: make-before-break switching (FR-10, recommended).
 - `TntnWeightedScorePolicy` normalizes delay and rate relative to the accesses
   being compared, so a score is only meaningful next to the others from the
   same evaluation.

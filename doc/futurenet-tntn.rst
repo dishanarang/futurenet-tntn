@@ -71,6 +71,15 @@ switches. Switching away from an unavailable access, the initial selection
 and a forced switch are never delayed, because waiting would leave the node
 without a working access or ignore an explicit command.
 
+**Break-before-make by default, make-before-break when possible.** A
+handover takes ``HandoverExecutionDelay``. By default (SRS section 5,
+``MakeBeforeBreak`` = false) the node releases the old access when the
+handover starts and has no access until it completes. With
+``MakeBeforeBreak`` = true the old access stays current until the new one is
+ready, but only if the old access is still available at handover start
+(SRS FR-10): a failed access cannot carry traffic, so leaving it always
+interrupts service.
+
 Class relationships
 ~~~~~~~~~~~~~~~~~~~
 
@@ -224,19 +233,25 @@ lower, as ``tntn-policy-demo`` shows.
 
     StartHandover(target, reason):
         inProgress = true
-        fire HandoverStart(node, current, target, reason)
+        previous = current
+        keepOld = MakeBeforeBreak and current != TNTN_NO_ACCESS
+                  and provider(current) reports available now
+        if not keepOld: current = TNTN_NO_ACCESS          # break before make
+        fire HandoverStart(node, previous, target, reason)
         schedule CompleteHandover after HandoverExecutionDelay
 
     CompleteHandover():
-        old = current; current = target; inProgress = false
+        current = target; inProgress = false
         lastHandoverCompletion = now
-        fire HandoverComplete(node, old, current)
+        fire HandoverComplete(node, previous, current)
 
 Dwell applies to every reason except ``INITIAL_SELECTION``,
 ``CURRENT_UNAVAILABLE`` and ``FORCED``. When nothing is available the manager
 keeps its current access, so it returns to it as soon as it recovers.
-``GetCurrentAccess()`` keeps returning the old access until the handover
-completes.
+During a handover ``GetCurrentAccess()`` returns ``TNTN_NO_ACCESS``
+(break-before-make) or the old access (make-before-break). ``HandoverStart``
+fires after that choice, so a listener can read ``GetCurrentAccess()`` to
+know whether to interrupt forwarding.
 
 **Cost.** One evaluation reads each of the node's *A* accesses once and the
 policy scans them once: O(*A*) per node per interval, O(*N*·*A*) per interval
@@ -284,7 +299,6 @@ Scope and Limitations
   point-to-point link as the NTN path.
 - No ``futurenet-common`` package was available; ``TntnAccessState`` is
   local to this module and the common event CSV schema is written directly.
-- Make-before-break (FR-10) is not implemented.
 - Weighted scores are relative to the accesses compared in the same
   evaluation, not absolute quality measures.
 - Default values are project teaching values (SRS section 5), not
@@ -349,12 +363,13 @@ Attributes
 Ranges are enforced by attribute checkers or by ``NS_ABORT_MSG_IF``
 (guidelines CG-11).
 
-======================================================  ===========  ================  =========================================
+======================================================  ===========  ================  =================================================
 Attribute                                               Default      Range             Meaning
-======================================================  ===========  ================  =========================================
+======================================================  ===========  ================  =================================================
 ``TntnAccessManager::DecisionInterval``                 1 s          100 ms - 10 s     Time between evaluations
 ``TntnAccessManager::MinDwellTime``                     5 s          0 - 60 s          Minimum time before an optional switch
 ``TntnAccessManager::HandoverExecutionDelay``           50 ms        0 - 2 s           Handover start to completion
+``TntnAccessManager::MakeBeforeBreak``                  false        bool              Keep the old access during a handover if it works
 ``TntnTerrestrialPreferredPolicy::MaxAcceptableDelay``  150 ms       1 ms - 5 s        Largest acceptable terrestrial delay
 ``TntnTerrestrialPreferredPolicy::MaxAcceptableLoss``   0.10         0 - 1             Largest acceptable terrestrial loss ratio
 ``TntnTerrestrialPreferredPolicy::MinAcceptableRate``   1 Mbps       0 - 10 Gbps       Smallest acceptable terrestrial rate
@@ -371,7 +386,7 @@ Attribute                                               Default      Range      
 ``TntnMockAccessStateProvider::Rate``                   50 Mbps      >= 0              Data rate
 ``TntnMockAccessStateProvider::Load``                   0.2          0 - 1             Normalized load
 ``TntnPointToPointAccessStateProvider::AccessType``     Terrestrial  Terrestrial, Ntn  Network kind
-======================================================  ===========  ================  =========================================
+======================================================  ===========  ================  =================================================
 
 Attributes can be set from the command line of any example, e.g.
 ``--ns3::TntnAccessManager::MinDwellTime=10s``.
@@ -427,7 +442,10 @@ Examples
     UEs connected to a router by a terrestrial (50 Mbit/s, 15 ms) and an NTN
     (10 Mbit/s, 270 ms) point-to-point link, using
     ``TntnPointToPointAccessStateProvider``. On ``HandoverComplete`` the UE's
-    default route moves to the new link, so UDP traffic changes path. Writes
+    default route moves to the new link, so UDP traffic changes path; with
+    break-before-make the route is removed on ``HandoverStart``.
+    ``--makeBeforeBreak=true`` removes the loss of optional handovers
+    (70 vs 55 packets lost per UE at 10 ms spacing in the default scenario). Writes
     per-packet path and one-way delay.
 
 ``tntn-policy-demo``
@@ -472,7 +490,7 @@ Validation
 Testing
 ~~~~~~~
 
-``./test.py -s futurenet-tntn`` runs 18 test cases:
+``./test.py -s futurenet-tntn`` runs 19 test cases:
 
 =============================================  ================================================
 Test                                           Checks
@@ -486,6 +504,7 @@ T04                                            Hysteresis blocks small improveme
 Lowest-delay attributes                        Default and range
 T05 / T06                                      Dwell blocks early return; traces report old/new, reason, times
 ForceAccess                                    Overrides policy and dwell; refuses unavailable target
+FR-10 make-before-break                        Old access kept only if enabled and still available
 Repeatability                                  Identical runs give identical handover traces (guidelines 8.4)
 Manager attributes                             Defaults and ranges
 T6 integration                                 Point-to-point provider on a real ns-3 link drives the manager
